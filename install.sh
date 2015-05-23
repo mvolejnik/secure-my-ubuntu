@@ -69,10 +69,22 @@ echo -n "$PASS" | cryptsetup open --type luks "$DISK"3 lvm
 
 # Create volumes
 pvcreate /dev/mapper/lvm
-vgcreate Ubuntu /dev/mapper/lvm
-lvcreate -L 10G Ubuntu -n rootvol
-lvcreate -L 1G Ubuntu -n swapvol
-lvcreate -l 100%FREE Ubuntu -n homevol
+vgcreate -v vgsystem /dev/mapper/lvm
+
+LVTABFILE=lvtab
+LINE=0
+while read LVVG LVLVNAME LVSIZE; do
+  if [ ${$LVVG:0:1} == "#" ]; then
+    continue
+  fi;
+  LINE=$(($LINE+1))
+  echo "Preparing Logical Volume No. $LINE: "LVVG=$LVVG LVLVNAME=$LVVNAME LVSIZE=$LVSIZE"
+  echo lvcreate -L LVSIZE $LVVG -n $LVLVNAME
+done <$LVTABFILE
+exit
+#lvcreate -L 10G vgsystem -n rootvol
+#lvcreate -L 1G vgsystem -n swapvol
+#lvcreate -l 100%FREE vgsystem -n homevol
 
 # Start Ubiquity
 echo ""
@@ -97,8 +109,8 @@ fi
 ubiquity gtk_ui
 
 # Mount everything
-mount /dev/Ubuntu/rootvol /mnt
-mount /dev/Ubuntu/homevol /mnt/home
+mount /dev/vgsystem/rootvol /mnt
+mount /dev/vgsystem/homevol /mnt/home
 chroot /mnt mount /proc
 mount --bind /dev /mnt/dev
 chroot /mnt mount /boot
