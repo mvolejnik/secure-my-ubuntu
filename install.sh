@@ -62,6 +62,8 @@ function confirm {
    echo ""
 }
 
+VG=vgsystem
+
 confirm "(Re)partion disk?" $YES
 if [[ "$CONFIRM" == "$YES" ]]; then
 
@@ -74,6 +76,7 @@ if [[ "$CONFIRM" == "$YES" ]]; then
     echo "Installer exiting..."
     exit 0
   fi
+  DEVICE=${DISK}3
 
   # Prompt for whether an SCM will be used or not
   #echo -e "\nYou can use an SCM for configuration after install, or this script can perform configuration during the install.\n"
@@ -84,7 +87,10 @@ if [[ "$CONFIRM" == "$YES" ]]; then
   # Ensure disk is not mounted
   for D in "$DISK"* ; do umount $D ; done
 
+  
+
   # Partition disk
+
   sgdisk $DISK -Z
   sgdisk $DISK -g
   sgdisk $DISK -n 1:0:+512M -t 1:ef00 # create EFI partition
@@ -93,20 +99,20 @@ if [[ "$CONFIRM" == "$YES" ]]; then
   echo ""
 
   CIPHER=aes-xts-plain64
-  confirm "Encrypt entire disk partition 3 on ${DISK} using ${CIPHER}?" $YES
+  confirm "Encrypt entire disk partition ${DISK}3 using ${CIPHER}?" $YES
   ENCRYPT=$CONFIRM
   if [[ $ENCRYPT == "$YES" ]]; then
     # Set up LUKS
     echo "Please enter a disk encryption passphrase..."
     getPassphrase
     echo -n "$PASS" | cryptsetup luksFormat --cipher aes-xts-plain64 "$DISK"3 -
-    echo -n "$PASS" | cryptsetup open --type luks "$DISK"3 lvm
+    echo -n "$PASS" | cryptsetup open --type luks ${DISK}3 lvm
+    DEVICE=/dev/mapper/lvm
   fi
 
-  VG=vgsystem
   # Create volumes
-  pvcreate /dev/mapper/lvm
-  vgcreate -v $VG /dev/mapper/lvm
+  pvcreate $DEVICE
+  vgcreate -v $VG $DEVICE
 
   LVTABFILE=lvtab
   LINE=0
@@ -178,53 +184,77 @@ echo "Mounting /proc..."
 chroot /mnt mount /proc
 echo "Mounting /dev..."
 mount --bind /dev /mnt/dev
+echo "Mounting /boot..."
 chroot /mnt mount /boot
 
 #if [ "$DOCONFIG" = "y" ]; then
+
   echo -e "\n\nApplying recommended system settings...\n"
 
   while [ -z "$ADMINUSER" ]; do read -p "Enter the name of the user you created in the GUI: " ADMINUSER; done
 
+  #TODO
   # Update /etc/fstab
   #echo "none     /tmp     tmpfs     rw,noexec,nosuid,nodev     0     0" >> /mnt/etc/fstab
   #sed -ie '/\s\/home\s/ s/defaults/defaults,noexec,nosuid,nodev/' /mnt/etc/fstab
   #echo "none     /run/shm     tmpfs     rw,noexec,nosuid,nodev     0     0" >> /mnt/etc/fstab
 
   # Enable automatic updates
+confirm "Enable automatic updates?" $YES
+if [[ "$CONFIRM" == "$YES" ]]; then
   echo "Enable automatic updates"
   echo "APT::Periodic::Update-Package-Lists \"1\";
 APT::Periodic::Unattended-Upgrade \"1\";
 APT::Periodic::AutocleanInterval \"7\";
 " >> /mnt/etc/apt/apt.conf.d/20auto-upgrades
   chmod 644 /mnt/etc/apt/apt.conf.d/20auto-upgrades
+fi
 
   # Prevent standard user executing su
-  echo "Prevent standard user executing su"
+confirm "Prevent standard user executing su?" $YES
+if [[ "$CONFIRM" == "$YES" ]]; then
+  echo "Prevent standard user executing su..."
   chroot /mnt dpkg-statoverride --update --add root adm 4750 /bin/su
+fi
 
-  # Disable apport (error reporting)
-  echo "Disabling error reporting"
+# Disable apport (error reporting)
+confirm "Disable error reporting?" $YES
+if [[ "$CONFIRM" == "$YES" ]]; then
+  echo "Disabling error reporting..."
   sed -ie '/^enabled=1$/ s/1/0/' /mnt/etc/default/apport
+fi 
 
   # Protect user home directories
-  echo "Protecting user home directories"
+confirm "Protect user home directories?" $YES
+if [[ "$CONFIRM" == "$YES" ]]; then
+  echo "Protecting user home directories..."
   sed -ie '/^DIR_MODE=/ s/=[0-9]*\+/=0750/' /mnt/etc/adduser.conf
   sed -ie '/^UMASK\s\+/ s/022/027/' /mnt/etc/login.defs
   chmod 750 /mnt/home/"$ADMINUSER"
+fi
 
-  # Disable shell access for new users (not affecting the existing admin user)
-  echo "Disagling shell for new users"
+# Disable shell access for new users (not affecting the existing admin user)
+confirm "Disable shell access for new users\(default shell nologin\)?" $YES
+if [[ "$CONFIRM" == "$YES" ]]; then
+  echo "Disabling shell for new users..."
   sed -ie '/^SHELL=/ s/=.*\+/=\/usr\/sbin\/nologin/' /mnt/etc/default/useradd
   sed -ie '/^DSHELL=/ s/=.*\+/=\/usr\/sbin\/nologin/' /mnt/etc/adduser.conf
+fi
 
   # Disable guest login
-  "Disabling guest login"
+confirm "Disable guest login?" $YES
+if [[ "$CONFIRM" == "$YES" ]]; then
+  echo "Disabling guest login..."
   mkdir /mnt/etc/lightdm/lightdm.conf.d
   echo "[SeatDefaults]
 allow-guest=false
 " > /mnt/etc/lightdm/lightdm.conf.d/50-no-guest.conf
+fi
+
 
   # A hook to disable online scopes in dash on login
+confirm "A hook to disable online scopes in dash on login?" $YES
+if [[ "$CONFIRM" == "$YES" ]]; then
   echo "Disabling Online action in dash on login"
   echo '#!/bin/bash' > /mnt/usr/local/bin/unity-privacy-hook.sh
   echo "gsettings set com.canonical.Unity.Lenses remote-content-search 'none'
@@ -237,26 +267,38 @@ exit 0
   chmod 755 /mnt/usr/local/bin/unity-privacy-hook.sh
   echo "[SeatDefaults]
 session-setup-script=/usr/local/bin/unity-privacy-hook.sh" > /mnt/etc/lightdm/lightdm.conf.d/20privacy-hook.conf
+fi
 
   # Create standard user
-  echo ""
+confirm "Create standard user?" $YES
+if [[ "$CONFIRM" == "$YES" ]]; then
+  echo "Creating standard non-admin user..."
   while [ -z "$ENDUSER" ]; do read -p "Username for primary device user: " ENDUSER; done
   chroot /mnt adduser "$ENDUSER"
+fi
 
-  # Fix some permissions in /var that are writable and executable by the standard user
+  # Fix /var to avoid it being writable by the standard user
+confirm "Fix /var to avoid it being writable by the standard user?" $YES
+if [[ "$CONFIRM" == "$YES" ]]; then
   chmod o-w /mnt/var/crash
   chmod o-w /mnt/var/metrics
   chmod o-w /mnt/var/tmp
+fi
 
   # Fix the lightdm-data subdirectory on the /var partition to avoid it being writable and executable by the standard user
+confirm "Fix the lightdm-data to avoid it being writable and executable by the standard user?" $NO
+if [[ "$CONFIRM" == "$YES" ]]; then
   mkdir /mnt/home/lightdm-data
   chmod 755 /mnt/home/lightdm-data
   mkdir /mnt/home/lightdm-data/"$ENDUSER"
   chroot /mnt chown "$ENDUSER":lightdm /home/lightdm-data/"$ENDUSER"
   chmod 770 /mnt/home/lightdm-data/"$ENDUSER"
   chroot /mnt ln -s /home/lightdm-data/"$ENDUSER" /var/lib/lightdm-data/"$ENDUSER"
+fi
 
   # Set grub password
+confirm "Set GRUB password?" $NO
+if [[ "$CONFIRM" == "$YES" ]]; then
   echo "Please enter a grub sysadmin passphrase..."
   getPassphrase
   echo "set superusers=\"sysadmin\"" >> /mnt/etc/grub.d/40_custom
@@ -265,20 +307,26 @@ session-setup-script=/usr/local/bin/unity-privacy-hook.sh" > /mnt/etc/lightdm/li
   sed -ie '/^GRUB_CMDLINE_LINUX_DEFAULT=/ s/"$/ module.sig_enforce=yes"/' /mnt/etc/default/grub
   echo "GRUB_SAVEDEFAULT=false" >> /mnt/etc/default/grub
   chroot /mnt update-grub
-#fi
+fi
 
 # Create /etc/crypttab
-blkid | grep "$DISK"3 | awk -F"\"" '{print "lvm UUID=" $2, "none luks,discard"}' > /mnt/etc/crypttab
-chmod 664 /mnt/etc/crypttab
+if [[ "$ENCRYPT" == "$YES" ]]; then
+  blkid | grep "$DISK"3 | awk -F"\"" '{print "lvm UUID=" $2, "none luks,discard"}' > /mnt/etc/crypttab
+  chmod 664 /mnt/etc/crypttab
+fi
 
 # Update initramfs
-chroot /mnt update-initramfs -u -k all
+confirm "Update initramfs?" $NO
+if [[ "$CONFIRM" == "$YES" ]]; then
+  chroot /mnt update-initramfs -u -k all
+fi
 
 echo -e "\nINSTALLATION COMPLETE\n"
 if [ "$DOCONFIG" = "y" ]; then
-  echo "Remember to run the post installation script after rebooting to finalise configuration."
+  echo "!!! Remember to run the post installation script after rebooting to finalise configuration. !!!"
 fi
-read -p "Reboot now? [y/n]: " CONFIRM
-if [ "$CONFIRM" = "y" ]; then
+
+confirm "Reboot now?" $NO
+if [[ "$CONFIRM" == "$YES" ]]; then
   reboot
 fi
