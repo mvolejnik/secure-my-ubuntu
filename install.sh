@@ -175,7 +175,6 @@ while read LVLVNAME LVSIZE LVVG MOUNT; do
   echo "Mounting $LINE: LVLVNAME=$LVLVNAME MOUNT=$MOUNT"
   echo mount /dev/$VG/$LVLVNAME /mnt$MOUNT
 done <$LVTABFILE
-exit
 
 # Mount everything
 #mount /dev/vgsystem/rootvol /mnt
