@@ -1,0 +1,17 @@
+#
+#
+#
+#
+# LVM Tab File - Logical Volumes
+#
+# Volume Group Name/Path <TAB> Logical Volume Name/Path <TAB> Size
+rootvol	16G	vgsystem	/
+swapvol	4G	vgsystem	swap
+tmpvol	4G	vgsystem	/tmp
+varvol	8G	vgsystem	/var
+logvol	16G	vgsystem	/var/log
+optvol	8G	vgsystem	/opt
+usrvol	16G	vgsystem	/usr
+srvvol	8G	vgsystem	/srv
+etcvol	1G	vgsystem	/etc
+homevol	4G	vgsystem	/home

@@ -4,15 +4,11 @@
 #
 # LVM Tab File - Logical Volumes
 #
-# Volume Group Name/Path <TAB> Logical Volume Name/Path <TAB> Size
-vgsystem	rootvol	16G
-vgsystem	swapvol	4G
-vgsystem	tmpvol	4G
-vgsystem	varvol	8G
-vgsystem	logvol	8G
-vgsystem	optvol	16G
-#vgsystem	usrvol	16G
-vgsystem	usrlocalvol	64G
-#vgsystem	srvvol	8G
-#vgsystem	etcvol	1G		
-vgsystem	homevol	100%FREE
+# Logical Volume Name/Path <TAB> Size <TAB> Volumen Group Name/Path <TAB> Mount Point
+rootvol	6G	vgsystem	/
+swapvol	1G	vgsystem	swap
+tmpvol	1G	vgsystem	/tmp
+varvol	2G	vgsystem	/var
+logvol	2G	vgsystem	/var/log
+usrlocalvol	4G	vgsystem	/usr/local
+homevol	100%FREE	vgsystem	/home

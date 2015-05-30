@@ -1,0 +1,10 @@
+#
+#
+#
+#
+# LVM Tab File - Logical Volumes
+#
+# Volume Group Name/Path <TAB> Logical Volume Name/Path <TAB> Size
+rootvol	10G	vgsystem	/
+swapvol	1G	vgsystem	swap
+homevol	100%FREE	vgsystem	/home

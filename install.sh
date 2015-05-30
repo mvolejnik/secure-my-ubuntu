@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 #
 # Contains public sector information licensed under the Open Government Licence v3.0.
@@ -16,6 +16,9 @@ if [[ $UID -ne 0 ]]; then
 	echo "This script needs to be run as root (with sudo)"
 	exit 1
 fi
+
+YES=Y
+NO=N
 
 function promptPassphrase {
   PASS=""
@@ -39,55 +42,95 @@ function getPassphrase {
   done
 }
 
-# Prompt for disk device to install to
-echo -e "\nSearching for disks...\n"
-lshw -short -class disk
-while [ -z "$DISK" ]; do read -p "Enter the disk to install to (eg. /dev/sda): " DISK; done
+function confirm {
+   QUESTION=$1
+   CONFIRM=
+   DEFAULT=$2
+   OPTION="y/n"
+   if [[ "${DEFAULT^^}" == "$YES" ]]; then
+     OPTION="Y/n"
+   elif [[ "${DEFAULT^^}" == "$NO" ]]; then
+     OPTION="y/N"
+   fi
+   while [[ (-z "$CONFIRM") && (${CONFIRM^^} != "$YES" && ${CONFIRM^^} != "$NO") ]]; do
+     read -p "$QUESTION ["$OPTION"]: " CONFIRM
+     if [[ (-z "$CONFIRM") ]]; then
+       CONFIRM=$DEFAULT
+     fi
+   done
+   CONFIRM=${CONFIRM^^}
+   echo ""
+}
 
-# Prompt for whether an SCM will be used or not
-echo -e "\nYou can use an SCM for configuration after install, or this script can perform configuration during the install.\n"
-while [ "$DOCONFIG" != "y" -a "$DOCONFIG" != "n" ]; do read -p "Should the script perform configuration? [y/n]: " DOCONFIG; done
+confirm "(Re)partion disk?" $YES
+if [[ "$CONFIRM" == "$YES" ]]; then
 
-echo -e "\n\nOk, preparing to partition...\n"
+  # Prompt for disk device to install to
+  echo -e "\nSearching for disks...\n"
+  lshw -short -class disk
+  while [ -z "$DISK" ]; do read -p "Enter the disk to install to (eg. /dev/sda): " DISK; done
+  confirm "(Re)partition disk $DISK?" $YES
+  if [[ "$CONFIRM" == "$NO" ]]; then
+    echo "Installer exiting..."
+    exit 0
+  fi
 
-# Ensure disk is not mounted
-for D in "$DISK"* ; do umount $D ; done
+  # Prompt for whether an SCM will be used or not
+  #echo -e "\nYou can use an SCM for configuration after install, or this script can perform configuration during the install.\n"
+  #while [ "$DOCONFIG" != "y" -a "$DOCONFIG" != "n" ]; do read -p "Should the script perform configuration? [y/n]: " DOCONFIG; done
+  
+  echo -e "\n\nOk, preparing to partition...\n"
 
-# Partition disk
-sgdisk $DISK -Z
-sgdisk $DISK -g
-sgdisk $DISK -n 1:0:+512M -t 1:ef00 # create EFI partition
-sgdisk $DISK -n 2:0:+512M -t 2:8300 # create boot partition
-sgdisk $DISK -N 3 -t 3:8e00         # create partition filling rest of disk
-echo ""
+  # Ensure disk is not mounted
+  for D in "$DISK"* ; do umount $D ; done
 
-# Set up LUKS
-echo "Please enter a disk encryption passphrase..."
-getPassphrase
-echo -n "$PASS" | cryptsetup luksFormat --cipher aes-xts-plain64 "$DISK"3 -
-echo -n "$PASS" | cryptsetup open --type luks "$DISK"3 lvm
+  # Partition disk
+  sgdisk $DISK -Z
+  sgdisk $DISK -g
+  sgdisk $DISK -n 1:0:+512M -t 1:ef00 # create EFI partition
+  sgdisk $DISK -n 2:0:+1024M -t 2:8300 # create boot partition
+  sgdisk $DISK -N 3 -t 3:8e00         # create partition filling rest of disk
+  echo ""
 
-# Create volumes
-pvcreate /dev/mapper/lvm
-vgcreate -v vgsystem /dev/mapper/lvm
+  CIPHER=aes-xts-plain64
+  confirm "Encrypt entire disk partition 3 on ${DISK} using ${CIPHER}?" $YES
+  ENCRYPT=$CONFIRM
+  if [[ $ENCRYPT == "$YES" ]]; then
+    # Set up LUKS
+    echo "Please enter a disk encryption passphrase..."
+    getPassphrase
+    echo -n "$PASS" | cryptsetup luksFormat --cipher aes-xts-plain64 "$DISK"3 -
+    echo -n "$PASS" | cryptsetup open --type luks "$DISK"3 lvm
+  fi
 
-LVTABFILE=lvtab
-LINE=0
-while read LVVG LVLVNAME LVSIZE; do
-  if [ ${$LVVG:0:1} == "#" ]; then
-    continue
-  fi;
-  LINE=$(($LINE+1))
-  echo "Preparing Logical Volume No. $LINE: "LVVG=$LVVG LVLVNAME=$LVVNAME LVSIZE=$LVSIZE"
-  echo lvcreate -L LVSIZE $LVVG -n $LVLVNAME
-done <$LVTABFILE
-exit
-#lvcreate -L 10G vgsystem -n rootvol
-#lvcreate -L 1G vgsystem -n swapvol
-#lvcreate -l 100%FREE vgsystem -n homevol
+  VG=vgsystem
+  # Create volumes
+  pvcreate /dev/mapper/lvm
+  vgcreate -v $VG /dev/mapper/lvm
+
+  LVTABFILE=lvtab
+  LINE=0
+  while read LVLVNAME LVSIZE LVVG MOUNT; do
+    if [[ ${LVLVNAME:0:1} == "#" ]]; then
+      continue
+    fi;
+    LINE=$(($LINE+1))
+    OPSWITCH=
+    echo ""
+    if [[ "$LVSIZE" == *"%"* ]]; then
+      echo "Setting up LV $LVLVNAME extent to $LVSIZE"
+      OPSWITCH=l
+    else
+      echo "Setting up LV $LVLVNAME to size $LVSIZE"
+      OPSWITCH=L
+    fi
+    echo "Preparing Logical Volume No. $LINE: LVVG=$LVVG LVLVNAME=$LVLVNAME LVSIZE=$LVSIZE"
+    lvcreate -"$OPSWITCH" $LVSIZE $LVVG -n $LVLVNAME
+  done <$LVTABFILE
+fi
 
 # Start Ubiquity
-echo ""
+echo "\n"
 echo "GUI INSTALLER INSTRUCTIONS"
 echo -e "-------------------------\n"
 echo "When prompted for \"Installation Type\" select \"Something Else\"."
@@ -95,37 +138,60 @@ echo "Then assign each device-mapper volume, click Change and use as EXT4 (excep
 echo "Assign each volume its respective mount point (eg. homevol to /home, root to / etc.)."
 echo -n "Also use "
 echo -n "$DISK"
+echo "1 as EFI partition."
+echo -n "$DISK"
 echo "2 as EXT4 and a mount point of /boot."
 echo ""
 echo "The user you create will be the ADMINISTRATOR of the system."
 echo ""
-echo "IMPORTANT: When the installer is finished select \"Continue Testing\" so this script can finish up."
+echo "!!! IMPORTANT: When the installer is finished select \"Continue Testing\" so this script can finish up. !!!"
 echo ""
-read -p "Continue and launch GUI installer now? [y/n]: " CONFIRM
-if [ "$CONFIRM" != "y" ]; then
+
+confirm "Continue and launch GUI installer now?" $YES
+if [ "$CONFIRM" == "$NO" ]; then
   echo "Installer exiting..."
   exit
 fi
 ubiquity gtk_ui
 
+LVTABFILE=lvtab
+LINE=0
+echo "Mounting OS's disks using $LVTABFILE file..."
+while read LVLVNAME LVSIZE LVVG MOUNT; do
+  if [[ ${LVLVNAME:0:1} == "#" ]]; then
+    continue
+  fi;
+  if [[ ${MOUNT:0:1} != "/" ]]; then
+    echo "Skipping $MOUNT"
+    continue
+  fi
+  LINE=$(($LINE+1))
+  echo "Mounting $LINE: LVLVNAME=$LVLVNAME MOUNT=$MOUNT"
+  echo mount /dev/$VG/$LVLVNAME /mnt$MOUNT
+done <$LVTABFILE
+exit
+
 # Mount everything
-mount /dev/vgsystem/rootvol /mnt
-mount /dev/vgsystem/homevol /mnt/home
+#mount /dev/vgsystem/rootvol /mnt
+#mount /dev/vgsystem/homevol /mnt/home
+echo "Mounting /proc..."
 chroot /mnt mount /proc
+echo "Mounting /dev..."
 mount --bind /dev /mnt/dev
 chroot /mnt mount /boot
 
-if [ "$DOCONFIG" = "y" ]; then
+#if [ "$DOCONFIG" = "y" ]; then
   echo -e "\n\nApplying recommended system settings...\n"
 
   while [ -z "$ADMINUSER" ]; do read -p "Enter the name of the user you created in the GUI: " ADMINUSER; done
 
   # Update /etc/fstab
-  echo "none     /tmp     tmpfs     rw,noexec,nosuid,nodev     0     0" >> /mnt/etc/fstab
-  sed -ie '/\s\/home\s/ s/defaults/defaults,noexec,nosuid,nodev/' /mnt/etc/fstab
-  echo "none     /run/shm     tmpfs     rw,noexec,nosuid,nodev     0     0" >> /mnt/etc/fstab
+  #echo "none     /tmp     tmpfs     rw,noexec,nosuid,nodev     0     0" >> /mnt/etc/fstab
+  #sed -ie '/\s\/home\s/ s/defaults/defaults,noexec,nosuid,nodev/' /mnt/etc/fstab
+  #echo "none     /run/shm     tmpfs     rw,noexec,nosuid,nodev     0     0" >> /mnt/etc/fstab
 
   # Enable automatic updates
+  echo "Enable automatic updates"
   echo "APT::Periodic::Update-Package-Lists \"1\";
 APT::Periodic::Unattended-Upgrade \"1\";
 APT::Periodic::AutocleanInterval \"7\";
@@ -133,27 +199,33 @@ APT::Periodic::AutocleanInterval \"7\";
   chmod 644 /mnt/etc/apt/apt.conf.d/20auto-upgrades
 
   # Prevent standard user executing su
+  echo "Prevent standard user executing su"
   chroot /mnt dpkg-statoverride --update --add root adm 4750 /bin/su
 
   # Disable apport (error reporting)
+  echo "Disabling error reporting"
   sed -ie '/^enabled=1$/ s/1/0/' /mnt/etc/default/apport
 
   # Protect user home directories
+  echo "Protecting user home directories"
   sed -ie '/^DIR_MODE=/ s/=[0-9]*\+/=0750/' /mnt/etc/adduser.conf
   sed -ie '/^UMASK\s\+/ s/022/027/' /mnt/etc/login.defs
   chmod 750 /mnt/home/"$ADMINUSER"
 
   # Disable shell access for new users (not affecting the existing admin user)
+  echo "Disagling shell for new users"
   sed -ie '/^SHELL=/ s/=.*\+/=\/usr\/sbin\/nologin/' /mnt/etc/default/useradd
   sed -ie '/^DSHELL=/ s/=.*\+/=\/usr\/sbin\/nologin/' /mnt/etc/adduser.conf
 
   # Disable guest login
+  "Disabling guest login"
   mkdir /mnt/etc/lightdm/lightdm.conf.d
   echo "[SeatDefaults]
 allow-guest=false
 " > /mnt/etc/lightdm/lightdm.conf.d/50-no-guest.conf
 
   # A hook to disable online scopes in dash on login
+  echo "Disabling Online action in dash on login"
   echo '#!/bin/bash' > /mnt/usr/local/bin/unity-privacy-hook.sh
   echo "gsettings set com.canonical.Unity.Lenses remote-content-search 'none'
 gsettings set com.canonical.Unity.Lenses disabled-scopes \"['more_suggestions-amazon.scope', 'more_suggestions-u1ms.scope', 'more_suggestions-populartracks.scope', 'music-musicstore.scope', 'more_suggestions-ebay.scope', 'more_suggestions-ubuntushop.scope', 'more_suggestions-skimlinks.scope']\"
@@ -193,7 +265,7 @@ session-setup-script=/usr/local/bin/unity-privacy-hook.sh" > /mnt/etc/lightdm/li
   sed -ie '/^GRUB_CMDLINE_LINUX_DEFAULT=/ s/"$/ module.sig_enforce=yes"/' /mnt/etc/default/grub
   echo "GRUB_SAVEDEFAULT=false" >> /mnt/etc/default/grub
   chroot /mnt update-grub
-fi
+#fi
 
 # Create /etc/crypttab
 blkid | grep "$DISK"3 | awk -F"\"" '{print "lvm UUID=" $2, "none luks,discard"}' > /mnt/etc/crypttab
