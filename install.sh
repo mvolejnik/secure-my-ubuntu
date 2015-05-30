@@ -173,7 +173,7 @@ while read LVLVNAME LVSIZE LVVG MOUNT; do
   fi
   LINE=$(($LINE+1))
   echo "Mounting $LINE: LVLVNAME=$LVLVNAME MOUNT=$MOUNT"
-  echo mount /dev/$VG/$LVLVNAME /mnt$MOUNT
+  mount /dev/$VG/$LVLVNAME /mnt$MOUNT
 done <$LVTABFILE
 
 # Mount everything
@@ -315,7 +315,7 @@ if [[ "$ENCRYPT" == "$YES" ]]; then
 fi
 
 # Update initramfs
-confirm "Update initramfs?" $NO
+confirm "Update initramfs?" $YES
 if [[ "$CONFIRM" == "$YES" ]]; then
   chroot /mnt update-initramfs -u -k all
 fi
